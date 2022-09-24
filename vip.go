@@ -7,19 +7,19 @@ import (
 	"unsafe"
 )
 
-// AddAddr adds the specified IP address prefix (CIDR) to the interface.
-func AddAddr(intf *net.Interface, p netip.Prefix, label string) error {
-	return addOrDelAddr(intf.Index, syscall.RTM_NEWADDR, p, label,
+// InterfaceAddPrefix adds the specified IP address prefix (CIDR) to the interface.
+func InterfaceAddPrefix(intf *net.Interface, pfx netip.Prefix, label string) error {
+	return addOrDelAddr(intf.Index, syscall.RTM_NEWADDR, pfx, label,
 		syscall.NLM_F_CREATE|syscall.NLM_F_EXCL|syscall.NLM_F_ACK)
 }
 
-// DelAddr deletes the specified IP address prefix (CIDR) from the interface.
-func DelAddr(intf *net.Interface, p netip.Prefix) error {
-	return addOrDelAddr(intf.Index, syscall.RTM_DELADDR, p, "",
+// InterfaceDelPrefix deletes the specified IP address prefix (CIDR) from the interface.
+func InterfaceDelPrefix(intf *net.Interface, pfx netip.Prefix) error {
+	return addOrDelAddr(intf.Index, syscall.RTM_DELADDR, pfx, "",
 		syscall.NLM_F_ACK)
 }
 
-func addOrDelAddr(ifIndex int, proto uint16, p netip.Prefix, label string, flags uint16) error {
+func addOrDelAddr(ifIndex int, proto uint16, pfx netip.Prefix, label string, flags uint16) error {
 	s, err := syscall.Socket(syscall.AF_NETLINK, syscall.SOCK_RAW, syscall.NETLINK_ROUTE)
 	if err != nil {
 		return err
@@ -29,7 +29,7 @@ func addOrDelAddr(ifIndex int, proto uint16, p netip.Prefix, label string, flags
 	if err := syscall.Bind(s, lsa); err != nil {
 		return err
 	}
-	req, err := buildAddOrDelAddrReq(ifIndex, proto, p, label, flags)
+	req, err := buildAddOrDelAddrReq(ifIndex, proto, pfx, label, flags)
 	if err != nil {
 		return err
 	}
@@ -67,8 +67,8 @@ done:
 	return nil
 }
 
-func buildAddOrDelAddrReq(ifIndex int, proto uint16, p netip.Prefix, label string, flags uint16) ([]byte, error) {
-	addr := p.Addr()
+func buildAddOrDelAddrReq(ifIndex int, proto uint16, pfx netip.Prefix, label string, flags uint16) ([]byte, error) {
+	addr := pfx.Addr()
 	addrByteLen := addr.BitLen() / 8
 	isIPv4 := addr.Is4()
 
@@ -96,7 +96,7 @@ func buildAddOrDelAddrReq(ifIndex int, proto uint16, p netip.Prefix, label strin
 	} else {
 		msg.Family = syscall.AF_INET6
 	}
-	prefixlen := p.Bits()
+	prefixlen := pfx.Bits()
 	msg.Prefixlen = uint8(prefixlen)
 	msg.Index = uint32(ifIndex)
 	dest = serializeIfAddrmsg(dest, msg)
@@ -130,7 +130,7 @@ func serializeNlMsghdr(b []byte, hdr *syscall.NlMsghdr) []byte {
 	*(*uint16)(unsafe.Pointer(&b[6:8][0])) = hdr.Flags
 	*(*uint32)(unsafe.Pointer(&b[8:12][0])) = hdr.Seq
 	*(*uint32)(unsafe.Pointer(&b[12:16][0])) = hdr.Pid
-	return b[syscall.SizeofIfAddrmsg:]
+	return b[syscall.SizeofNlMsghdr:]
 }
 
 func serializeIfAddrmsg(b []byte, msg *syscall.IfAddrmsg) []byte {
