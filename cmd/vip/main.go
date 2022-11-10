@@ -1,6 +1,8 @@
 package main
 
 import (
+	"bytes"
+	"context"
 	"errors"
 	"fmt"
 	"io"
@@ -10,6 +12,7 @@ import (
 	"runtime/debug"
 
 	"github.com/hnakamur/netvip"
+	"github.com/mdlayher/arp"
 	"github.com/urfave/cli/v2"
 )
 
@@ -92,6 +95,11 @@ func main() {
 						Aliases: []string{"q"},
 						Usage:   "just exit with 0 if the interface has the address or 0 otherwise without print nothing",
 					},
+					&cli.BoolFlag{
+						Name:    "watch",
+						Aliases: []string{"w"},
+						Usage:   "watch GARP packets and delete VIP everytime GARP packet is received",
+					},
 				},
 				Action: func(cCtx *cli.Context) error {
 					intf, err := interfaceByName(cCtx.String("interface"))
@@ -103,7 +111,7 @@ func main() {
 						showErrAndCommandHelpAndExit(cCtx, err, exitCodeUsageError)
 					}
 					w := appWriterForQuietFlag(cCtx)
-					return execDelCommand(intf, cidr, w)
+					return execDelCommand(intf, cidr, w, cCtx.Bool("watch"))
 				},
 			},
 			{
@@ -215,7 +223,21 @@ func execAddCommand(intf *net.Interface, cidr netip.Prefix, label string, sendsG
 	return nil
 }
 
-func execDelCommand(intf *net.Interface, cidr netip.Prefix, appWriter io.Writer) error {
+func execDelCommand(intf *net.Interface, cidr netip.Prefix, appWriter io.Writer, watch bool) error {
+	if watch {
+		return netvip.WatchGARP(context.TODO(), intf, cidr.Addr(), func(pkt *arp.Packet) error {
+			if bytes.Equal(pkt.SenderHardwareAddr, intf.HardwareAddr) {
+				appWriterPrintf(appWriter, "interface %s received GARP packet for VIP %s sent from itself.\n", intf.Name, cidr)
+				return nil
+			}
+			return delVIPIfExists(intf, cidr, appWriter)
+		})
+	}
+
+	return delVIPIfExists(intf, cidr, appWriter)
+}
+
+func delVIPIfExists(intf *net.Interface, cidr netip.Prefix, appWriter io.Writer) error {
 	has, err := netvip.InterfaceHasPrefix(intf, cidr)
 	if err != nil {
 		return err

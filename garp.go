@@ -2,9 +2,11 @@ package netvip
 
 import (
 	"bytes"
+	"context"
 	"errors"
 	"net"
 	"net/netip"
+	"syscall"
 
 	"github.com/mdlayher/arp"
 	"github.com/mdlayher/ethernet"
@@ -62,4 +64,42 @@ func IsGARPPacket(p *arp.Packet, vip netip.Addr) bool {
 		p.SenderIP.Compare(vip) == 0 &&
 		bytes.Equal(p.TargetHardwareAddr, macAddrBroadcast) &&
 		p.TargetIP.Compare(vip) == 0
+}
+
+func WatchGARP(ctx context.Context, intf *net.Interface, addr netip.Addr, callback func(*arp.Packet) error) error {
+	fd, err := syscall.Socket(syscall.AF_PACKET, syscall.SOCK_RAW, int(htons(uint16(syscall.ETH_P_ALL))))
+	if err != nil {
+		return err
+	}
+	defer syscall.Close(fd)
+
+	if err := syscall.BindToDevice(fd, intf.Name); err != nil {
+		return err
+	}
+
+	buf := make([]byte, 1500)
+	for {
+		n, _, err := syscall.Recvfrom(fd, buf, 0)
+		if err != nil {
+			return err
+		}
+		pkt, _, err := ParseARPPacket(buf[:n])
+		if err != nil {
+			if errors.Is(err, errInvalidARPPacket) {
+				continue
+			}
+			return err
+		}
+		if IsGARPPacket(pkt, addr) {
+			if err := callback(pkt); err != nil {
+				return err
+			}
+		}
+
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		default:
+		}
+	}
 }

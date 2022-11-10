@@ -1,4 +1,4 @@
-package main
+package netvip
 
 import (
 	"encoding/binary"
