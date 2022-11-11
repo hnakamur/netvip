@@ -3,6 +3,7 @@ package main
 import (
 	"bytes"
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"net"
@@ -10,6 +11,7 @@ import (
 	"os"
 	"runtime/debug"
 	"strings"
+	"syscall"
 
 	"github.com/hnakamur/netvip"
 	"github.com/mdlayher/arp"
@@ -75,9 +77,10 @@ func main() {
 				Aliases: []string{"d"},
 				Usage:   "ensure a virtual IP address is deleted. does nothing if it is already deleted.",
 				Flags: []cli.Flag{
-					&cli.StringFlag{
+					&cli.GenericFlag{
 						Name:     "interface",
 						Aliases:  []string{"i"},
+						Value:    &NetInterfaceValue{},
 						Usage:    "the network interface to delete a virutal IP address (e.g. eth0)",
 						Required: true,
 					},
@@ -165,17 +168,12 @@ func appWriterForQuietFlag(cCtx *cli.Context) io.Writer {
 }
 
 func execAddCommand(intf *net.Interface, cidr netip.Prefix, label string, sendsGARP bool, appWriter io.Writer) error {
-	has, err := netvip.InterfaceHasPrefix(intf, cidr)
-	if err != nil {
-		return err
-	}
-	if has {
-		fmt.Fprintf(appWriter, "interface %s already has address %s, does nothing\n", intf.Name, cidr)
-	} else {
-		err = netvip.InterfaceAddPrefix(intf, cidr, label)
-		if err != nil {
+	if err := netvip.InterfaceAddPrefix(intf, cidr, label); err != nil {
+		if !os.IsExist(err) {
 			return err
 		}
+		fmt.Fprintf(appWriter, "address %s is already added to interface %s\n", cidr, intf.Name)
+	} else {
 		fmt.Fprintf(appWriter, "added address %s to interface %s\n", cidr, intf.Name)
 	}
 
@@ -196,28 +194,22 @@ func execDelCommand(intf *net.Interface, cidr netip.Prefix, appWriter io.Writer,
 				fmt.Fprintf(appWriter, "interface %s received GARP packet for VIP %s sent from itself.\n", intf.Name, cidr)
 				return nil
 			}
-			return delVIPIfExists(intf, cidr, appWriter)
+			return deleteVIP(intf, cidr, appWriter)
 		})
 	}
 
-	return delVIPIfExists(intf, cidr, appWriter)
+	return deleteVIP(intf, cidr, appWriter)
 }
 
-func delVIPIfExists(intf *net.Interface, cidr netip.Prefix, appWriter io.Writer) error {
-	has, err := netvip.InterfaceHasPrefix(intf, cidr)
-	if err != nil {
-		return err
+func deleteVIP(intf *net.Interface, cidr netip.Prefix, appWriter io.Writer) error {
+	if err := netvip.InterfaceDelPrefix(intf, cidr); err != nil {
+		if !errors.Is(err, syscall.EADDRNOTAVAIL) {
+			return err
+		}
+		fmt.Fprintf(appWriter, "address %s is aleady deleted from interface %s\n", cidr, intf.Name)
+	} else {
+		fmt.Fprintf(appWriter, "deleted address %s from interface %s\n", cidr, intf.Name)
 	}
-	if !has {
-		fmt.Fprintf(appWriter, "interface %s already does not have address %s, does nothing\n", intf.Name, cidr)
-		return nil
-	}
-
-	err = netvip.InterfaceDelPrefix(intf, cidr)
-	if err != nil {
-		return err
-	}
-	fmt.Fprintf(appWriter, "deleted address %s from interface %s\n", cidr, intf.Name)
 	return nil
 }
 
