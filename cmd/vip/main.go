@@ -3,13 +3,13 @@ package main
 import (
 	"bytes"
 	"context"
-	"errors"
 	"fmt"
 	"io"
 	"net"
 	"net/netip"
 	"os"
 	"runtime/debug"
+	"strings"
 
 	"github.com/hnakamur/netvip"
 	"github.com/mdlayher/arp"
@@ -32,15 +32,17 @@ func main() {
 				Aliases: []string{"a"},
 				Usage:   "ensure a virtual IP address is added. does nothing if it is already added.",
 				Flags: []cli.Flag{
-					&cli.StringFlag{
+					&cli.GenericFlag{
 						Name:     "interface",
 						Aliases:  []string{"i"},
+						Value:    &NetInterfaceValue{},
 						Usage:    "the network interface to add a virutal IP address (e.g. eth0)",
 						Required: true,
 					},
-					&cli.StringFlag{
+					&cli.GenericFlag{
 						Name:     "address",
 						Aliases:  []string{"a"},
+						Value:    &NetPrefixValue{},
 						Usage:    "a virutal IP address (CIDR) to be added (e.g. 192.0.2.100/32)",
 						Required: true,
 					},
@@ -61,14 +63,8 @@ func main() {
 					},
 				},
 				Action: func(cCtx *cli.Context) error {
-					intf, err := interfaceByName(cCtx.String("interface"))
-					if err != nil {
-						showErrAndCommandHelpAndExit(cCtx, err, exitCodeUsageError)
-					}
-					cidr, err := parseCIDR(cCtx.String("address"))
-					if err != nil {
-						showErrAndCommandHelpAndExit(cCtx, err, exitCodeUsageError)
-					}
+					intf := cCtx.Generic("interface").(*NetInterfaceValue).intf
+					cidr := *cCtx.Generic("address").(*NetPrefixValue).prefix
 					w := appWriterForQuietFlag(cCtx)
 					return execAddCommand(intf, cidr, cCtx.String("label"), cCtx.Bool("garp"), w)
 				},
@@ -84,9 +80,10 @@ func main() {
 						Usage:    "the network interface to delete a virutal IP address (e.g. eth0)",
 						Required: true,
 					},
-					&cli.StringFlag{
+					&cli.GenericFlag{
 						Name:     "address",
 						Aliases:  []string{"a"},
+						Value:    &NetPrefixValue{},
 						Usage:    "a virutal IP address (CIDR) to be deleted (e.g. 192.0.2.100/32)",
 						Required: true,
 					},
@@ -102,14 +99,8 @@ func main() {
 					},
 				},
 				Action: func(cCtx *cli.Context) error {
-					intf, err := interfaceByName(cCtx.String("interface"))
-					if err != nil {
-						showErrAndCommandHelpAndExit(cCtx, err, exitCodeUsageError)
-					}
-					cidr, err := parseCIDR(cCtx.String("address"))
-					if err != nil {
-						showErrAndCommandHelpAndExit(cCtx, err, exitCodeUsageError)
-					}
+					intf := cCtx.Generic("interface").(*NetInterfaceValue).intf
+					cidr := *cCtx.Generic("address").(*NetPrefixValue).prefix
 					w := appWriterForQuietFlag(cCtx)
 					return execDelCommand(intf, cidr, w, cCtx.Bool("watch"))
 				},
@@ -118,15 +109,17 @@ func main() {
 				Name:  "has",
 				Usage: "checks whether the specified interface has the virtual IP address prefix (CIDR).",
 				Flags: []cli.Flag{
-					&cli.StringFlag{
+					&cli.GenericFlag{
 						Name:     "interface",
 						Aliases:  []string{"i"},
+						Value:    &NetInterfaceValue{},
 						Usage:    "the network interface to check if it has a virutal IP address (e.g. eth0)",
 						Required: true,
 					},
-					&cli.StringFlag{
+					&cli.GenericFlag{
 						Name:     "address",
 						Aliases:  []string{"a"},
+						Value:    &NetPrefixValue{},
 						Usage:    "a virutal IP address (CIDR) to be checked (e.g. 192.0.2.100/32)",
 						Required: true,
 					},
@@ -137,14 +130,8 @@ func main() {
 					},
 				},
 				Action: func(cCtx *cli.Context) error {
-					intf, err := interfaceByName(cCtx.String("interface"))
-					if err != nil {
-						showErrAndCommandHelpAndExit(cCtx, err, exitCodeUsageError)
-					}
-					cidr, err := parseCIDR(cCtx.String("address"))
-					if err != nil {
-						showErrAndCommandHelpAndExit(cCtx, err, exitCodeUsageError)
-					}
+					intf := cCtx.Generic("interface").(*NetInterfaceValue).intf
+					cidr := *cCtx.Generic("address").(*NetPrefixValue).prefix
 					w := appWriterForQuietFlag(cCtx)
 					return execHasCommand(intf, cidr, w)
 				},
@@ -152,13 +139,12 @@ func main() {
 		},
 	}
 	if err := app.Run(os.Args); err != nil {
-		var jerr *JustExitError
-		if errors.As(err, &jerr) {
-			os.Exit(jerr.ExitCode)
-		} else {
-			fmt.Fprintf(app.ErrWriter, "Error: %s\n", err.Error())
-			os.Exit(exitCodeRuntimeError)
+		cli.HandleExitCoder(err)
+		fmt.Fprintf(app.ErrWriter, "\nError: %s\n", err)
+		if strings.HasPrefix(err.Error(), "Required flag") {
+			os.Exit(exitCodeUsageError)
 		}
+		os.Exit(exitCodeRuntimeError)
 	}
 }
 
@@ -170,30 +156,9 @@ func Version() string {
 	return info.Main.Version
 }
 
-func showErrAndCommandHelpAndExit(cCtx *cli.Context, err error, exitCode int) {
-	fmt.Fprintf(cCtx.App.ErrWriter, "Error: %s\n\n", err.Error())
-	cli.ShowCommandHelpAndExit(cCtx, cCtx.Command.Name, exitCode)
-}
-
-func interfaceByName(name string) (*net.Interface, error) {
-	intf, err := net.InterfaceByName(name)
-	if err != nil {
-		return nil, fmt.Errorf("no such network interface with name %q", name)
-	}
-	return intf, nil
-}
-
-func parseCIDR(cidrStr string) (netip.Prefix, error) {
-	pfx, err := netip.ParsePrefix(cidrStr)
-	if err != nil {
-		return netip.Prefix{}, fmt.Errorf("invalid IP address prefix (CIDR): %s", cidrStr)
-	}
-	return pfx, nil
-}
-
 func appWriterForQuietFlag(cCtx *cli.Context) io.Writer {
 	if cCtx.Bool("quiet") {
-		return nil
+		return io.Discard
 	}
 	return cCtx.App.Writer
 }
@@ -204,20 +169,20 @@ func execAddCommand(intf *net.Interface, cidr netip.Prefix, label string, sendsG
 		return err
 	}
 	if has {
-		appWriterPrintf(appWriter, "interface %s already has address %s, does nothing\n", intf.Name, cidr)
+		fmt.Fprintf(appWriter, "interface %s already has address %s, does nothing\n", intf.Name, cidr)
 	} else {
 		err = netvip.InterfaceAddPrefix(intf, cidr, label)
 		if err != nil {
 			return err
 		}
-		appWriterPrintf(appWriter, "added address %s to interface %s\n", cidr, intf.Name)
+		fmt.Fprintf(appWriter, "added address %s to interface %s\n", cidr, intf.Name)
 	}
 
 	if sendsGARP {
 		if err := netvip.SendGARP(intf, cidr.Addr()); err != nil {
 			return err
 		}
-		appWriterPrintf(appWriter, "sent GARP packet for address %s at interface %s\n", cidr, intf.Name)
+		fmt.Fprintf(appWriter, "sent GARP packet for address %s at interface %s\n", cidr, intf.Name)
 	}
 
 	return nil
@@ -227,7 +192,7 @@ func execDelCommand(intf *net.Interface, cidr netip.Prefix, appWriter io.Writer,
 	if watch {
 		return netvip.WatchGARP(context.TODO(), intf, cidr.Addr(), func(pkt *arp.Packet) error {
 			if bytes.Equal(pkt.SenderHardwareAddr, intf.HardwareAddr) {
-				appWriterPrintf(appWriter, "interface %s received GARP packet for VIP %s sent from itself.\n", intf.Name, cidr)
+				fmt.Fprintf(appWriter, "interface %s received GARP packet for VIP %s sent from itself.\n", intf.Name, cidr)
 				return nil
 			}
 			return delVIPIfExists(intf, cidr, appWriter)
@@ -243,7 +208,7 @@ func delVIPIfExists(intf *net.Interface, cidr netip.Prefix, appWriter io.Writer)
 		return err
 	}
 	if !has {
-		appWriterPrintf(appWriter, "interface %s already does not have address %s, does nothing\n", intf.Name, cidr)
+		fmt.Fprintf(appWriter, "interface %s already does not have address %s, does nothing\n", intf.Name, cidr)
 		return nil
 	}
 
@@ -251,7 +216,7 @@ func delVIPIfExists(intf *net.Interface, cidr netip.Prefix, appWriter io.Writer)
 	if err != nil {
 		return err
 	}
-	appWriterPrintf(appWriter, "deleted address %s from interface %s\n", cidr, intf.Name)
+	fmt.Fprintf(appWriter, "deleted address %s from interface %s\n", cidr, intf.Name)
 	return nil
 }
 
@@ -261,25 +226,58 @@ func execHasCommand(intf *net.Interface, cidr netip.Prefix, appWriter io.Writer)
 		return err
 	}
 	if has {
-		appWriterPrintf(appWriter, "interface %s has address %s\n", intf.Name, cidr)
+		fmt.Fprintf(appWriter, "interface %s has address %s\n", intf.Name, cidr)
 		return nil
 	} else {
-		appWriterPrintf(appWriter, "interface %s does not have address %s\n", intf.Name, cidr)
-		return &JustExitError{ExitCode: 1}
+		fmt.Fprintf(appWriter, "interface %s does not have address %s\n", intf.Name, cidr)
+		return cli.Exit("", exitCodeRuntimeError)
 	}
 }
 
-type JustExitError struct {
-	ExitCode int
+type NetPrefixValue struct {
+	prefix *netip.Prefix
 }
 
-func (e *JustExitError) Error() string {
-	return fmt.Sprintf("just exit with status %d", e.ExitCode)
-}
-
-func appWriterPrintf(w io.Writer, format string, a ...any) (n int, err error) {
-	if w == nil {
-		return 0, nil
+func (p *NetPrefixValue) Set(value string) error {
+	prefix, err := netip.ParsePrefix(value)
+	if err != nil {
+		return err
 	}
-	return fmt.Fprintf(w, format, a...)
+	p.prefix = &prefix
+	return nil
+}
+
+func (p *NetPrefixValue) String() string {
+	if p.prefix == nil {
+		return ""
+	}
+	return p.prefix.String()
+}
+
+func (p *NetPrefixValue) Get() any {
+	return p.prefix
+}
+
+type NetInterfaceValue struct {
+	intf *net.Interface
+}
+
+func (i *NetInterfaceValue) Set(value string) error {
+	intf, err := net.InterfaceByName(value)
+	if err != nil {
+		return err
+	}
+	i.intf = intf
+	return nil
+}
+
+func (i *NetInterfaceValue) String() string {
+	if i.intf == nil {
+		return ""
+	}
+	return i.intf.Name
+}
+
+func (i *NetInterfaceValue) Get() any {
+	return i.intf
 }
