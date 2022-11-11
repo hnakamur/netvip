@@ -54,6 +54,7 @@ func main() {
 					&cli.BoolFlag{
 						Name:    "garp",
 						Aliases: []string{"g"},
+						Value:   true,
 						Usage:   "send GARP (Gratuitous ARP) packet when address is added or even when it is alreay added",
 					},
 					&cli.BoolFlag{
