@@ -2,6 +2,6 @@
 
 package netvip
 
-import "encoding/binary"
-
-var nativeEndian = binary.LittleEndian
+func htons(i uint16) uint16 {
+	return (i << 8) | (i >> 8)
+}
