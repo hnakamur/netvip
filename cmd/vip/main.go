@@ -189,7 +189,7 @@ func execAddCommand(intf *net.Interface, cidr netip.Prefix, label string, sendsG
 
 func execDelCommand(intf *net.Interface, cidr netip.Prefix, appWriter io.Writer, watch bool) error {
 	if watch {
-		return netvip.WatchGARP(context.TODO(), intf, cidr.Addr(), func(pkt *arp.Packet) error {
+		return netvip.WatchGARP(context.TODO(), cidr.Addr(), func(pkt *arp.Packet) error {
 			if bytes.Equal(pkt.SenderHardwareAddr, intf.HardwareAddr) {
 				fmt.Fprintf(appWriter, "interface %s received GARP packet for VIP %s sent from itself.\n", intf.Name, cidr)
 				return nil

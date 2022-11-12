@@ -66,16 +66,14 @@ func IsGARPPacket(p *arp.Packet, vip netip.Addr) bool {
 		p.TargetIP.Compare(vip) == 0
 }
 
-func WatchGARP(ctx context.Context, intf *net.Interface, addr netip.Addr, callback func(*arp.Packet) error) error {
-	fd, err := syscall.Socket(syscall.AF_PACKET, syscall.SOCK_RAW, int(htons(uint16(syscall.ETH_P_ALL))))
+func WatchGARP(ctx context.Context, addr netip.Addr, callback func(*arp.Packet) error) error {
+	const typ = syscall.SOCK_RAW | syscall.SOCK_CLOEXEC
+	proto := int(htons(uint16(syscall.ETH_P_ARP)))
+	fd, err := syscall.Socket(syscall.AF_PACKET, typ, proto)
 	if err != nil {
 		return err
 	}
 	defer syscall.Close(fd)
-
-	if err := syscall.BindToDevice(fd, intf.Name); err != nil {
-		return err
-	}
 
 	buf := make([]byte, 1500)
 	for {
@@ -85,15 +83,20 @@ func WatchGARP(ctx context.Context, intf *net.Interface, addr netip.Addr, callba
 		default:
 		}
 
+		tv := &syscall.Timeval{Sec: 1, Usec: 0}
+		if err := syscall.SetsockoptTimeval(fd, syscall.SOL_SOCKET, syscall.SO_RCVTIMEO, tv); err != nil {
+			return err
+		}
+
 		n, _, err := syscall.Recvfrom(fd, buf, 0)
 		if err != nil {
+			if errors.Is(err, syscall.EAGAIN) || errors.Is(err, syscall.EINTR) {
+				continue
+			}
 			return err
 		}
 		pkt, _, err := ParseARPPacket(buf[:n])
 		if err != nil {
-			if errors.Is(err, errInvalidARPPacket) {
-				continue
-			}
 			return err
 		}
 		if IsGARPPacket(pkt, addr) {
