@@ -79,6 +79,12 @@ func WatchGARP(ctx context.Context, intf *net.Interface, addr netip.Addr, callba
 
 	buf := make([]byte, 1500)
 	for {
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		default:
+		}
+
 		n, _, err := syscall.Recvfrom(fd, buf, 0)
 		if err != nil {
 			return err
@@ -94,12 +100,6 @@ func WatchGARP(ctx context.Context, intf *net.Interface, addr netip.Addr, callba
 			if err := callback(pkt); err != nil {
 				return err
 			}
-		}
-
-		select {
-		case <-ctx.Done():
-			return ctx.Err()
-		default:
 		}
 	}
 }
